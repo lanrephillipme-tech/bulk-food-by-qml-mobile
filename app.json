@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Bulk Food by QML",
+    "slug": "bulk-food-by-qml-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "bulkfoodqml",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "bundleIdentifier": "com.qml.bulkfood",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.qml.bulkfood",
+      "adaptiveIcon": {
+        "backgroundColor": "#138A36"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
