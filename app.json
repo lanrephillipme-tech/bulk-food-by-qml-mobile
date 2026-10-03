@@ -6,7 +6,9 @@
     "orientation": "portrait",
     "scheme": "bulkfoodqml",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "bundleIdentifier": "com.qml.bulkfood",
       "supportsTablet": true
@@ -19,6 +21,12 @@
     },
     "web": {
       "bundler": "metro"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b7bf1dfd-a67b-40c0-a395-006a64dfe53f"
+      }
+    },
+    "owner": "vidalpaybank"
   }
 }
