@@ -9,8 +9,19 @@ const money = new Intl.NumberFormat("en-NG", {
   maximumFractionDigits: 0
 });
 
-export function HomeScreen() {
+export function HomeScreen({
+  notificationStatus,
+  onEnableNotifications,
+  onSignOut,
+  viewerName
+}: {
+  notificationStatus?: string;
+  onEnableNotifications?: () => void;
+  onSignOut?: () => void;
+  viewerName?: string;
+}) {
   const progress = activePlan.paid / activePlan.total;
+  const name = viewerName ? viewerName.split(" ")[0] : user.name;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -18,12 +29,18 @@ export function HomeScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.eyebrow}>{user.city}, {user.country}</Text>
-            <Text style={styles.title}>Good morning, {user.name}</Text>
+            <Text style={styles.title}>Good morning, {name}</Text>
           </View>
-          <Pressable style={styles.iconButton}>
-            <Ionicons name="notifications-outline" size={22} color={palette.charcoal} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable style={styles.iconButton} onPress={onEnableNotifications}>
+              <Ionicons name="notifications-outline" size={22} color={palette.charcoal} />
+            </Pressable>
+            <Pressable style={styles.iconButton} onPress={onSignOut}>
+              <Ionicons name="log-out-outline" size={22} color={palette.charcoal} />
+            </Pressable>
+          </View>
         </View>
+        {notificationStatus ? <Text style={styles.notificationStatus}>{notificationStatus}</Text> : null}
 
         <View style={styles.scoreCard}>
           <View>
@@ -141,6 +158,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 18
   },
+  headerActions: {
+    flexDirection: "row",
+    gap: 8
+  },
   eyebrow: {
     color: palette.muted,
     fontSize: 13,
@@ -158,6 +179,12 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: "center",
     width: 44
+  },
+  notificationStatus: {
+    color: palette.muted,
+    fontSize: 12,
+    marginBottom: 12,
+    marginTop: -8
   },
   scoreCard: {
     backgroundColor: palette.charcoal,
