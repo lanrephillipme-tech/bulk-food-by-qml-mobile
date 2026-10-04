@@ -1,5 +1,6 @@
 {
   "cli": {
+    "appVersionSource": "local",
     "version": ">= 12.0.0"
   },
   "build": {
@@ -13,13 +14,15 @@
       },
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://bulk-food-by-qml.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://bulk-food-by-qml.onrender.com",
+        "NODE_ENV": "production"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://bulk-food-by-qml.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://bulk-food-by-qml.onrender.com",
+        "NODE_ENV": "production"
       }
     }
   },

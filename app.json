@@ -6,6 +6,10 @@
     "orientation": "portrait",
     "scheme": "bulkfoodqml",
     "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#F7F5EF",
+      "resizeMode": "contain"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -17,6 +21,10 @@
       "package": "com.qml.bulkfood",
       "adaptiveIcon": {
         "backgroundColor": "#138A36"
+      },
+      "splash": {
+        "backgroundColor": "#F7F5EF",
+        "resizeMode": "contain"
       }
     },
     "web": {
@@ -27,6 +35,15 @@
         "projectId": "b7bf1dfd-a67b-40c0-a395-006a64dfe53f"
       }
     },
-    "owner": "vidalpaybank"
+    "owner": "vidalpaybank",
+    "plugins": [
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F7F5EF"
+        }
+      ]
+    ]
   }
 }
