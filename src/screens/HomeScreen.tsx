@@ -10,11 +10,13 @@ const money = new Intl.NumberFormat("en-NG", {
 });
 
 export function HomeScreen({
+  onOpenCatalog,
   notificationStatus,
   onEnableNotifications,
   onSignOut,
   viewerName
 }: {
+  onOpenCatalog?: () => void;
   notificationStatus?: string;
   onEnableNotifications?: () => void;
   onSignOut?: () => void;
@@ -26,6 +28,7 @@ export function HomeScreen({
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Pressable style={styles.primaryButton} onPress={onOpenCatalog} accessibilityRole="button"><Text style={styles.primaryButtonText}>Browse global catalog</Text></Pressable>
         <View style={styles.header}>
           <View>
             <Text style={styles.eyebrow}>{user.city}, {user.country}</Text>

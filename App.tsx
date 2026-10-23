@@ -2,45 +2,35 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  View
+  View,
+  useWindowDimensions
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import { AuthBundle, AuthRole, requestPasswordReset, signIn, signUp } from "./src/api";
+import { AuthBundle, AuthRole, requestPasswordReset, resendSignupConfirmation, signIn, signUp } from "./src/api";
 import { palette } from "./src/data";
 import { registerForPushNotifications } from "./src/notifications";
 import { HomeScreen } from "./src/screens/HomeScreen";
+import { CatalogScreen } from "./src/screens/CatalogScreen";
+import { introSlides } from "./src/intro-slides";
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
-type AuthScreen = "intro" | "signin" | "signup" | "forgot";
+type AuthScreen = "intro" | "signin" | "signup" | "forgot" | "confirmation";
 type Notice = { tone: "success" | "error" | "info"; text: string } | null;
 
 const SESSION_KEY = "qml.mobile.session";
-
-const introSlides = [
-  {
-    title: "Bulk food, paid your way",
-    text: "Create food plans, join group buys, and keep household staples moving without leaving the QML wallet."
-  },
-  {
-    title: "Built for local markets",
-    text: "Discover Nigerian produce, proteins, grains, tubers, oils, and fresh stock from nearby verified sellers."
-  },
-  {
-    title: "Delivery and roles in one place",
-    text: "Customers, vendors, logistics partners, financiers, and corporate buyers can start from the same app."
-  }
-];
 
 const signupRoles: Array<{ key: AuthRole; label: string; text: string }> = [
   { key: "customer", label: "Customer", text: "Buy food and manage food plans." },
@@ -55,7 +45,20 @@ export default function App() {
   const [sessionBundle, setSessionBundle] = useState<AuthBundle | null>(null);
   const [authScreen, setAuthScreen] = useState<AuthScreen>("intro");
   const [notice, setNotice] = useState<Notice>(null);
+  const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState("");
   const [pushStatus, setPushStatus] = useState("Notifications not enabled");
+  const [catalogOpen, setCatalogOpen] = useState(true);
+
+  useEffect(() => {
+    const handleUrl = (url: string | null) => {
+      if (url?.split(/[?#]/)[0] !== "bulkfoodqml://auth/confirm") return;
+      setAuthScreen("signin");
+      setNotice({ tone: "info", text: "Sign in to continue after completing the email link." });
+    };
+    Linking.getInitialURL().then(handleUrl).catch(() => undefined);
+    const subscription = Linking.addEventListener("url", ({ url }) => handleUrl(url));
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -65,7 +68,13 @@ export default function App() {
         if (!active) return;
         if (rawSession) {
           const restored = JSON.parse(rawSession) as AuthBundle;
-          if (restored.session?.token) setSessionBundle(restored);
+          const expiresAt = Date.parse(restored.session?.expiresAt || "");
+          if (restored.session?.token && Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+            setSessionBundle(restored);
+          } else {
+            await AsyncStorage.removeItem(SESSION_KEY);
+            setAuthScreen("signin");
+          }
         }
       } catch {
         await AsyncStorage.removeItem(SESSION_KEY);
@@ -87,15 +96,17 @@ export default function App() {
     return user?.full_name || user?.name || user?.email || user?.phone || "friend";
   }, [sessionBundle]);
 
-  async function completeAuth(bundle: AuthBundle, fallbackMessage: string) {
+  async function completeAuth(bundle: AuthBundle, fallbackMessage: string, persistSession = true, signupEmail = "") {
     if (bundle.requiresConfirmation || !bundle.session?.token) {
       setNotice({ tone: "info", text: bundle.message || "Check your email or phone, then sign in." });
-      setAuthScreen("signin");
+      setPendingConfirmationEmail(signupEmail);
+      setAuthScreen(signupEmail ? "confirmation" : "signin");
       return;
     }
 
+    if (persistSession) await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(bundle));
+    else await AsyncStorage.removeItem(SESSION_KEY);
     setSessionBundle(bundle);
-    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(bundle));
     setNotice({ tone: "success", text: bundle.message || fallbackMessage });
   }
 
@@ -127,9 +138,7 @@ export default function App() {
       <SafeAreaProvider>
         <StatusBar style="dark" />
         <SafeAreaView style={styles.bootScreen}>
-          <View style={styles.logoMark}>
-            <Ionicons name="basket" size={34} color={palette.white} />
-          </View>
+          <Image source={introSlides[0].image} style={styles.bootImage} resizeMode="contain" accessibilityLabel="QML groceries" />
           <Text style={styles.bootTitle}>Bulk Food by QML</Text>
           <ActivityIndicator color={palette.green} />
         </SafeAreaView>
@@ -141,7 +150,8 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="dark" />
       {sessionBundle?.session?.token ? (
-        <HomeScreen
+        catalogOpen ? <CatalogScreen token={sessionBundle.session.token} onBack={() => setCatalogOpen(false)} /> : <HomeScreen
+          onOpenCatalog={() => setCatalogOpen(true)}
           notificationStatus={pushStatus}
           onEnableNotifications={handleEnableNotifications}
           onSignOut={handleSignOut}
@@ -151,6 +161,11 @@ export default function App() {
         <AuthExperience
           currentScreen={authScreen}
           notice={notice}
+          pendingConfirmationEmail={pendingConfirmationEmail}
+          onResendConfirmation={async (email) => {
+            const response = await resendSignupConfirmation(email);
+            setNotice({ tone: "success", text: response.message || "If the signup is pending, a new activation email is on its way." });
+          }}
           onForgotPassword={async (identifier) => {
             const response = await requestPasswordReset(identifier);
             setNotice({ tone: "success", text: response.message || "Password reset instructions sent." });
@@ -160,13 +175,23 @@ export default function App() {
             setNotice(null);
             setAuthScreen(screen);
           }}
-          onSignIn={async (identifier, password) => {
-            const bundle = await signIn(identifier, password);
-            await completeAuth(bundle, "Signed in securely.");
+          onSignIn={async (identifier, password, rememberMe) => {
+            try {
+              const bundle = await signIn(identifier, password);
+              await completeAuth(bundle, "Signed in securely.", rememberMe);
+            } catch (error) {
+              if (/email.*not confirmed|not confirmed.*email/i.test(error instanceof Error ? error.message : "") && identifier.includes("@")) {
+                setPendingConfirmationEmail(identifier);
+                setNotice({ tone: "info", text: "Confirm your email before signing in. You can request another activation link here." });
+                setAuthScreen("confirmation");
+                return;
+              }
+              throw error;
+            }
           }}
           onSignUp={async (input) => {
             const bundle = await signUp(input);
-            await completeAuth(bundle, "Account created.");
+            await completeAuth(bundle, "Account created.", true, input.identifier);
           }}
         />
       )}
@@ -178,6 +203,8 @@ export default function App() {
 function AuthExperience({
   currentScreen,
   notice,
+  pendingConfirmationEmail,
+  onResendConfirmation,
   onForgotPassword,
   onNavigate,
   onSignIn,
@@ -185,21 +212,68 @@ function AuthExperience({
 }: {
   currentScreen: AuthScreen;
   notice: Notice;
+  pendingConfirmationEmail: string;
+  onResendConfirmation: (email: string) => Promise<void>;
   onForgotPassword: (identifier: string) => Promise<void>;
   onNavigate: (screen: AuthScreen) => void;
-  onSignIn: (identifier: string, password: string) => Promise<void>;
+  onSignIn: (identifier: string, password: string, rememberMe: boolean) => Promise<void>;
   onSignUp: (input: { name: string; identifier: string; password: string; role: AuthRole; referralCode?: string }) => Promise<void>;
 }) {
   const [slideIndex, setSlideIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [name, setName] = useState("");
   const [referralCode, setReferralCode] = useState("");
   const [role, setRole] = useState<AuthRole>("customer");
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [formError, setFormError] = useState("");
+  const { height } = useWindowDimensions();
+  const touchStart = useRef(0);
+
+  useEffect(() => {
+    setFormError("");
+    setPassword("");
+    setConfirmPassword("");
+    setRoleMenuOpen(false);
+  }, [currentScreen]);
+
+  useEffect(() => {
+    if (pendingConfirmationEmail) setIdentifier(pendingConfirmationEmail);
+  }, [pendingConfirmationEmail]);
 
   async function submit(action: () => Promise<void>) {
+    if (busy) return;
+    if (!identifier.trim()) {
+      setFormError(currentScreen === "forgot" ? "Enter your email address." : "Enter your email or phone number.");
+      return;
+    }
+    if (currentScreen === "forgot" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier.trim())) {
+      setFormError("Enter a valid email address.");
+      return;
+    }
+    if (currentScreen === "signup" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier.trim())) {
+      setFormError("Enter a valid email address for account activation.");
+      return;
+    }
+    if (currentScreen === "signup" && !name.trim()) {
+      setFormError("Enter your full name.");
+      return;
+    }
+    if (currentScreen === "signin" && !password) {
+      setFormError("Enter your password.");
+      return;
+    }
+    if (currentScreen === "signup" && password.length < 8) {
+      setFormError("Password must be at least 8 characters.");
+      return;
+    }
+    if (currentScreen === "signup" && password !== confirmPassword) {
+      setFormError("Passwords do not match.");
+      return;
+    }
     setBusy(true);
     setFormError("");
     try {
@@ -214,34 +288,43 @@ function AuthExperience({
   if (currentScreen === "intro") {
     const slide = introSlides[slideIndex];
     return (
-      <SafeAreaView style={styles.authShell}>
-        <View style={styles.introTop}>
-          <View style={styles.logoMark}>
-            <Ionicons name="basket" size={34} color={palette.white} />
-          </View>
-          <Text style={styles.brand}>Bulk Food by QML</Text>
-        </View>
-        <View style={styles.introBody}>
-          <Text style={styles.introCount}>{slideIndex + 1} / {introSlides.length}</Text>
-          <Text style={styles.introTitle}>{slide.title}</Text>
-          <Text style={styles.introText}>{slide.text}</Text>
-          <View style={styles.dots}>
-            {introSlides.map((item, index) => (
-              <View key={item.title} style={[styles.dot, index === slideIndex ? styles.dotActive : null]} />
-            ))}
-          </View>
-        </View>
-        <View style={styles.authActions}>
-          <Pressable
-            style={styles.primaryButton}
-            onPress={() => slideIndex === introSlides.length - 1 ? onNavigate("signup") : setSlideIndex((value) => value + 1)}
+      <SafeAreaView style={styles.introShell}>
+        <ScrollView contentContainerStyle={styles.introContent}>
+          <View
+            onTouchStart={(event) => { touchStart.current = event.nativeEvent.pageX; }}
+            onTouchEnd={(event) => {
+              const delta = event.nativeEvent.pageX - touchStart.current;
+              if (Math.abs(delta) > 60) setSlideIndex((value) => Math.max(0, Math.min(introSlides.length - 1, value + (delta < 0 ? 1 : -1))));
+            }}
           >
-            <Text style={styles.primaryButtonText}>{slideIndex === introSlides.length - 1 ? "Get started" : "Next"}</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => onNavigate("signin")}>
-            <Text style={styles.secondaryButtonText}>I already have an account</Text>
-          </Pressable>
-        </View>
+            <Image source={slide.image} style={[styles.introImage, { height: Math.min(420, Math.max(200, height * 0.43)) }]} resizeMode="cover" accessibilityLabel={slide.title} />
+            <View style={styles.introBody}>
+              <Text style={styles.introTitle}>{slide.title}</Text>
+              <Text style={styles.introText}>{slide.text}</Text>
+            </View>
+          </View>
+          <View style={styles.introFooter}>
+            <View style={styles.dots}>
+              {introSlides.map((item, index) => (
+                <Pressable key={index} accessibilityRole="button" accessibilityLabel={`Open slide ${index + 1}`} accessibilityState={{ selected: index === slideIndex }} style={styles.dotButton} onPress={() => setSlideIndex(index)}>
+                  <View style={[styles.dot, index === slideIndex ? styles.dotActive : null]} />
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.introActions}>
+              <Pressable accessibilityRole="button" style={styles.skipButton} onPress={() => onNavigate("signin")}>
+                <Text style={styles.skipText}>Skip</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                style={[styles.primaryButton, styles.introNext]}
+                onPress={() => slideIndex === introSlides.length - 1 ? onNavigate("signup") : setSlideIndex((value) => value + 1)}
+              >
+                <Text style={styles.primaryButtonText}>{slideIndex === introSlides.length - 1 ? "Get Started" : "Next"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -250,12 +333,16 @@ function AuthExperience({
     <SafeAreaView style={styles.authShell}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.keyboard}>
         <ScrollView contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.brandLockup} accessibilityLabel="QML Foods">
+            <Image source={require("./assets/brand/qml-logo-solid-green.png")} style={styles.brandImage} resizeMode="contain" />
+            <Text style={styles.brandWordmark}>QML Foods</Text>
+          </View>
           <View style={styles.formHeader}>
             <Pressable style={styles.backButton} onPress={() => onNavigate(currentScreen === "signin" ? "intro" : "signin")}>
               <Ionicons name="chevron-back" size={22} color={palette.charcoal} />
             </Pressable>
             <Text style={styles.formTitle}>
-              {currentScreen === "signin" ? "Sign in" : currentScreen === "signup" ? "Create account" : "Forgot password"}
+              {currentScreen === "signin" ? "Log in" : currentScreen === "signup" ? "Create Account" : "Forgot Password"}
             </Text>
             <View style={styles.backButtonPlaceholder} />
           </View>
@@ -266,42 +353,72 @@ function AuthExperience({
 
             {currentScreen === "signin" ? (
               <>
-                <Text style={styles.formCopy}>Access your wallet, food plans, roles, orders, and delivery updates.</Text>
-                <LabeledInput label="Email or phone" value={identifier} onChangeText={setIdentifier} placeholder="ada@example.com or +234..." />
-                <LabeledInput label="Password" value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry />
-                <Pressable style={styles.textLink} onPress={() => onNavigate("forgot")}>
-                  <Text style={styles.textLinkText}>Forgot password?</Text>
-                </Pressable>
+                <Text style={styles.formCopy}>Enter your email and password to securely access your account and manage your services.</Text>
+                <LabeledInput icon="mail-outline" label="Email address" value={identifier} onChangeText={setIdentifier} placeholder="Email address" />
+                <LabeledInput icon="lock-closed-outline" label="Password" value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry />
+                <View style={styles.loginOptions}>
+                  <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: rememberMe }} style={styles.rememberButton} onPress={() => setRememberMe((value) => !value)}>
+                    <Ionicons name={rememberMe ? "checkbox" : "square-outline"} size={19} color={rememberMe ? palette.green : palette.muted} />
+                    <Text style={styles.rememberText}>Remember me</Text>
+                  </Pressable>
+                  <Pressable style={styles.textLink} onPress={() => onNavigate("forgot")}>
+                    <Text style={styles.textLinkText}>Forgot Password</Text>
+                  </Pressable>
+                </View>
                 <SubmitButton
                   busy={busy}
-                  label="Sign in"
-                  onPress={() => submit(() => onSignIn(identifier.trim(), password))}
+                  label="Login"
+                  onPress={() => submit(() => onSignIn(identifier.trim(), password, rememberMe))}
                 />
-                <Pressable style={styles.secondaryButton} onPress={() => onNavigate("signup")}>
-                  <Text style={styles.secondaryButtonText}>Create account</Text>
+                <Pressable style={styles.accountSwitch} onPress={() => onNavigate("signup")}>
+                  <Text style={styles.accountSwitchText}>Don't have an account?</Text>
+                  <Text style={styles.textLinkText}>Sign Up Here</Text>
                 </Pressable>
+                <SocialOptions onUnavailable={(provider) => setFormError(`${provider} sign-in isn't configured yet.`)} />
               </>
             ) : null}
 
             {currentScreen === "signup" ? (
               <>
-                <Text style={styles.formCopy}>Choose the account type first. Role approvals can continue after account creation.</Text>
-                <View style={styles.roleGrid}>
-                  {signupRoles.map((item) => (
-                    <Pressable
-                      key={item.key}
-                      style={[styles.roleOption, role === item.key ? styles.roleOptionActive : null]}
-                      onPress={() => setRole(item.key)}
-                    >
-                      <Text style={styles.roleOptionTitle}>{item.label}</Text>
-                      <Text style={styles.roleOptionText}>{item.text}</Text>
-                    </Pressable>
-                  ))}
+                <Text style={styles.formCopy}>Create a new account to get started and enjoy seamless access to our features.</Text>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Account type</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Account type: ${signupRoles.find((item) => item.key === role)?.label || "Customer"}`}
+                    accessibilityState={{ expanded: roleMenuOpen }}
+                    style={styles.roleDropdown}
+                    onPress={() => setRoleMenuOpen((open) => !open)}
+                  >
+                    <Text style={styles.roleDropdownLabel}>{signupRoles.find((item) => item.key === role)?.label || "Customer"}</Text>
+                    <Ionicons name={roleMenuOpen ? "chevron-up" : "chevron-down"} size={19} color={palette.charcoal} />
+                  </Pressable>
+                  <Text style={styles.roleDescription}>{signupRoles.find((item) => item.key === role)?.text}</Text>
+                  {roleMenuOpen ? (
+                    <View style={styles.roleMenu}>
+                      {signupRoles.map((item) => (
+                        <Pressable
+                          key={item.key}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: role === item.key }}
+                          style={[styles.roleMenuOption, role === item.key ? styles.roleMenuOptionActive : null]}
+                          onPress={() => {
+                            setRole(item.key);
+                            setRoleMenuOpen(false);
+                          }}
+                        >
+                          <Text style={styles.roleMenuOptionTitle}>{item.label}</Text>
+                          <Text style={styles.roleMenuOptionText}>{item.text}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
                 </View>
-                <LabeledInput label="Full name" value={name} onChangeText={setName} placeholder="Ada Okonkwo" />
-                <LabeledInput label="Email or phone" value={identifier} onChangeText={setIdentifier} placeholder="ada@example.com or +234..." />
-                <LabeledInput label="Password" value={password} onChangeText={setPassword} placeholder="At least 8 characters" secureTextEntry />
-                <LabeledInput label="Referral code" value={referralCode} onChangeText={setReferralCode} placeholder="Optional" />
+                <LabeledInput icon="person-outline" label="Full name" value={name} onChangeText={setName} placeholder="Ada Okonkwo" />
+                <LabeledInput icon="mail-outline" label="Email address" value={identifier} onChangeText={setIdentifier} placeholder="Email address" />
+                <LabeledInput icon="lock-closed-outline" label="Password" value={password} onChangeText={setPassword} placeholder="At least 8 characters" secureTextEntry />
+                <LabeledInput icon="lock-closed-outline" label="Confirm Password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Confirm Password" secureTextEntry />
+                <LabeledInput icon="gift-outline" label="Referral code" value={referralCode} onChangeText={setReferralCode} placeholder="Optional" />
                 <SubmitButton
                   busy={busy}
                   label="Create account"
@@ -313,23 +430,42 @@ function AuthExperience({
                     referralCode: referralCode.trim() || undefined
                   }))}
                 />
-                <Pressable style={styles.secondaryButton} onPress={() => onNavigate("signin")}>
-                  <Text style={styles.secondaryButtonText}>Back to sign in</Text>
+                <Pressable style={styles.accountSwitch} onPress={() => onNavigate("signin")}>
+                  <Text style={styles.accountSwitchText}>Already have an account?</Text>
+                  <Text style={styles.textLinkText}>Sign in here</Text>
                 </Pressable>
+                <SocialOptions onUnavailable={(provider) => setFormError(`${provider} sign-up isn't configured yet.`)} />
               </>
             ) : null}
 
             {currentScreen === "forgot" ? (
               <>
-                <Text style={styles.formCopy}>Enter the email address on your account and QML will request a secure reset link.</Text>
-                <LabeledInput label="Email" value={identifier} onChangeText={setIdentifier} placeholder="ada@example.com" />
+                <Text style={styles.formCopy}>Enter your email address to receive a secure reset link and regain access to your account.</Text>
+                <LabeledInput icon="mail-outline" label="Email address" value={identifier} onChangeText={setIdentifier} placeholder="Email address" />
                 <SubmitButton
                   busy={busy}
-                  label="Send reset link"
+                  label="Continue"
                   onPress={() => submit(() => onForgotPassword(identifier.trim()))}
                 />
-                <Pressable style={styles.secondaryButton} onPress={() => onNavigate("signin")}>
-                  <Text style={styles.secondaryButtonText}>Back to sign in</Text>
+                <Pressable style={styles.accountSwitch} onPress={() => onNavigate("signin")}>
+                  <Text style={styles.textLinkText}>Back to Log in</Text>
+                </Pressable>
+              </>
+            ) : null}
+
+            {currentScreen === "confirmation" ? (
+              <>
+                <View style={styles.confirmationIcon}>
+                  <Ionicons name="mail-open-outline" size={27} color={palette.green} />
+                </View>
+                <Text style={styles.formCopy}>We sent an activation link to {pendingConfirmationEmail || "your email address"}. Open it to confirm your email, then come back here to sign in.</Text>
+                <SubmitButton
+                  busy={busy}
+                  label="Resend activation email"
+                  onPress={() => submit(() => onResendConfirmation(pendingConfirmationEmail))}
+                />
+                <Pressable style={styles.accountSwitch} onPress={() => onNavigate("signin")}>
+                  <Text style={styles.textLinkText}>Go to sign in</Text>
                 </Pressable>
               </>
             ) : null}
@@ -345,27 +481,43 @@ function LabeledInput({
   value,
   onChangeText,
   placeholder,
-  secureTextEntry
+  secureTextEntry,
+  icon
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
   secureTextEntry?: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
 }) {
+  const [passwordVisible, setPasswordVisible] = useState(false);
   return (
     <View style={styles.inputGroup}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <TextInput
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder={placeholder}
-        placeholderTextColor="#8B968F"
-        secureTextEntry={secureTextEntry}
-        style={styles.input}
-        value={value}
-        onChangeText={onChangeText}
-      />
+      <View style={styles.inputFrame}>
+        <Ionicons name={icon} size={18} color={palette.muted} />
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder={placeholder}
+          placeholderTextColor="#8B968F"
+          secureTextEntry={secureTextEntry && !passwordVisible}
+          style={styles.input}
+          value={value}
+          onChangeText={onChangeText}
+        />
+        {secureTextEntry ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={passwordVisible ? "Hide password" : "Show password"}
+            onPress={() => setPasswordVisible((visible) => !visible)}
+            hitSlop={8}
+          >
+            <Ionicons name={passwordVisible ? "eye-off-outline" : "eye-outline"} size={19} color={palette.muted} />
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -375,6 +527,36 @@ function SubmitButton({ busy, label, onPress }: { busy: boolean; label: string; 
     <Pressable disabled={busy} style={[styles.primaryButton, busy ? styles.disabledButton : null]} onPress={onPress}>
       {busy ? <ActivityIndicator color={palette.white} /> : <Text style={styles.primaryButtonText}>{label}</Text>}
     </Pressable>
+  );
+}
+
+function SocialOptions({ onUnavailable }: { onUnavailable: (provider: string) => void }) {
+  const providers = [
+    { name: "Facebook", icon: "logo-facebook" as const },
+    { name: "Google", icon: "logo-google" as const },
+    { name: "Apple", icon: "logo-apple" as const }
+  ];
+  return (
+    <View style={styles.socialSection}>
+      <View style={styles.socialDivider}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>Or Continue With Account</Text>
+        <View style={styles.dividerLine} />
+      </View>
+      <View style={styles.socialButtons}>
+        {providers.map((provider) => (
+          <Pressable
+            key={provider.name}
+            accessibilityRole="button"
+            accessibilityLabel={`Continue with ${provider.name}`}
+            style={styles.socialButton}
+            onPress={() => onUnavailable(provider.name)}
+          >
+            <Ionicons name={provider.icon} size={19} color={palette.charcoal} />
+          </Pressable>
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -400,9 +582,9 @@ const styles = StyleSheet.create({
     gap: 10
   },
   authShell: {
-    backgroundColor: palette.offWhite,
+    backgroundColor: "#F3F5F4",
     flex: 1,
-    padding: 18
+    paddingHorizontal: 22
   },
   backButton: {
     alignItems: "center",
@@ -419,11 +601,12 @@ const styles = StyleSheet.create({
   },
   bootScreen: {
     alignItems: "center",
-    backgroundColor: palette.offWhite,
+    backgroundColor: palette.white,
     flex: 1,
     gap: 14,
     justifyContent: "center"
   },
+  bootImage: { width: 240, height: 240 },
   bootTitle: {
     color: palette.charcoal,
     fontSize: 24,
@@ -431,6 +614,22 @@ const styles = StyleSheet.create({
   },
   brand: {
     color: palette.charcoal,
+    fontSize: 19,
+    fontWeight: "900"
+  },
+  brandLockup: {
+    alignItems: "center",
+    flexDirection: "column",
+    gap: 2,
+    justifyContent: "center",
+    marginBottom: 18
+  },
+  brandImage: {
+    height: 68,
+    width: 68
+  },
+  brandWordmark: {
+    color: palette.green,
     fontSize: 19,
     fontWeight: "900"
   },
@@ -444,30 +643,56 @@ const styles = StyleSheet.create({
     width: 8
   },
   dotActive: {
-    backgroundColor: palette.green,
-    width: 28
+    backgroundColor: "#6CC51D"
   },
   dots: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: 24
+    justifyContent: "center",
+    flexWrap: "wrap"
   },
+  dotButton: { width: 24, height: 36, alignItems: "center", justifyContent: "center" },
+  introShell: { flex: 1, backgroundColor: palette.white },
+  introContent: { flexGrow: 1, width: "100%", maxWidth: 480, alignSelf: "center", paddingBottom: 20 },
+  introImage: { width: "100%" },
+  introFooter: { marginTop: "auto", paddingHorizontal: 18, paddingTop: 12, gap: 16 },
+  introActions: { flexDirection: "row", gap: 12, alignItems: "center" },
+  introNext: { flex: 1, backgroundColor: "#65AD16" },
+  skipButton: { width: 64, minHeight: 50, alignItems: "center", justifyContent: "center" },
+  skipText: { color: "#497F10", fontWeight: "800" },
   formCard: {
     backgroundColor: palette.white,
-    borderColor: palette.border,
-    borderRadius: 8,
+    borderColor: "#E7ECE9",
+    borderRadius: 12,
     borderWidth: 1,
-    gap: 14,
+    gap: 18,
     padding: 16
   },
   formContent: {
+    alignSelf: "center",
     flexGrow: 1,
-    paddingBottom: 26
+    justifyContent: "center",
+    maxWidth: 464,
+    paddingBottom: 26,
+    paddingHorizontal: 12,
+    width: "100%"
   },
   formCopy: {
     color: palette.muted,
     fontSize: 14,
-    lineHeight: 20
+    lineHeight: 20,
+    textAlign: "center"
+  },
+  confirmationIcon: {
+    alignItems: "center",
+    alignSelf: "center",
+    backgroundColor: "#EAF5ED",
+    borderColor: "#CDE6D3",
+    borderRadius: 30,
+    borderWidth: 1,
+    height: 58,
+    justifyContent: "center",
+    marginBottom: 4,
+    width: 58
   },
   formHeader: {
     alignItems: "center",
@@ -477,7 +702,7 @@ const styles = StyleSheet.create({
   },
   formTitle: {
     color: palette.charcoal,
-    fontSize: 22,
+    fontSize: 26,
     fontWeight: "900"
   },
   inlineError: {
@@ -501,14 +726,25 @@ const styles = StyleSheet.create({
     borderColor: "#BFE8CB"
   },
   input: {
-    backgroundColor: palette.offWhite,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
     color: palette.charcoal,
     fontSize: 15,
-    minHeight: 48,
-    paddingHorizontal: 12
+    minHeight: 46,
+    minWidth: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 0,
+    flex: 1,
+    flexShrink: 1
+  },
+  inputFrame: {
+    alignItems: "center",
+    backgroundColor: palette.white,
+    borderColor: "#EEF1EF",
+    borderRadius: 24,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    minHeight: 50,
+    paddingHorizontal: 13
   },
   inputGroup: {
     gap: 7
@@ -518,9 +754,72 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "800"
   },
-  introBody: {
+  loginOptions: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: -5
+  },
+  rememberButton: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 7,
+    minHeight: 36
+  },
+  rememberText: {
+    color: palette.muted,
+    fontSize: 12
+  },
+  accountSwitch: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 5,
+    justifyContent: "center",
+    minHeight: 36
+  },
+  accountSwitchText: {
+    color: palette.muted,
+    fontSize: 12
+  },
+  socialSection: {
+    gap: 11,
+    paddingTop: 2
+  },
+  socialDivider: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10
+  },
+  dividerLine: {
+    backgroundColor: palette.border,
     flex: 1,
+    height: 1
+  },
+  dividerText: {
+    color: palette.muted,
+    fontSize: 11
+  },
+  socialButtons: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
     justifyContent: "center"
+  },
+  socialButton: {
+    alignItems: "center",
+    backgroundColor: palette.white,
+    borderColor: palette.border,
+    borderRadius: 24,
+    borderWidth: 1,
+    height: 42,
+    justifyContent: "center",
+    width: 42
+  },
+  introBody: {
+    paddingHorizontal: 28,
+    paddingTop: 22,
+    alignItems: "center"
   },
   introCount: {
     color: palette.green,
@@ -529,16 +828,18 @@ const styles = StyleSheet.create({
     marginBottom: 14
   },
   introText: {
-    color: palette.muted,
-    fontSize: 17,
-    lineHeight: 25,
-    marginTop: 14
+    color: "#737982",
+    fontSize: 16,
+    lineHeight: 23,
+    marginTop: 10,
+    textAlign: "center"
   },
   introTitle: {
-    color: palette.charcoal,
-    fontSize: 36,
+    color: "#000000",
+    fontSize: 27,
     fontWeight: "900",
-    lineHeight: 42
+    lineHeight: 32,
+    textAlign: "center"
   },
   introTop: {
     alignItems: "center",
@@ -587,8 +888,8 @@ const styles = StyleSheet.create({
   primaryButton: {
     alignItems: "center",
     backgroundColor: palette.green,
-    borderRadius: 8,
-    minHeight: 50,
+    borderRadius: 26,
+    minHeight: 52,
     justifyContent: "center",
     paddingHorizontal: 14,
     paddingVertical: 14
@@ -597,34 +898,59 @@ const styles = StyleSheet.create({
     color: palette.white,
     fontWeight: "900"
   },
-  roleGrid: {
-    gap: 8
-  },
-  roleOption: {
+  roleDropdown: {
+    alignItems: "center",
     backgroundColor: palette.offWhite,
     borderColor: palette.border,
     borderRadius: 8,
     borderWidth: 1,
-    padding: 12
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 48,
+    paddingHorizontal: 12
   },
-  roleOptionActive: {
-    backgroundColor: palette.mint,
-    borderColor: palette.green
+  roleDropdownLabel: {
+    color: palette.charcoal,
+    fontSize: 15,
+    fontWeight: "900"
   },
-  roleOptionText: {
+  roleDescription: {
     color: palette.muted,
     fontSize: 12,
-    lineHeight: 17,
-    marginTop: 3
+    lineHeight: 17
   },
-  roleOptionTitle: {
+  roleMenu: {
+    backgroundColor: palette.white,
+    borderColor: palette.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: "hidden"
+  },
+  roleMenuOption: {
+    borderBottomColor: palette.border,
+    borderBottomWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  roleMenuOptionActive: {
+    backgroundColor: palette.mint
+  },
+  roleMenuOptionText: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 2
+  },
+  roleMenuOptionTitle: {
     color: palette.charcoal,
     fontSize: 14,
-    fontWeight: "900"
+    fontWeight: "800"
   },
   secondaryButton: {
     alignItems: "center",
-    backgroundColor: palette.mint,
+    backgroundColor: palette.white,
+    borderColor: palette.border,
+    borderWidth: 1,
     borderRadius: 8,
     minHeight: 50,
     justifyContent: "center",

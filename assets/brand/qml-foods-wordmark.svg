@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 760" role="img" aria-labelledby="title">
+  <title id="title">QML Foods</title>
+  <image href="./qml-logo-solid-green.png" x="40" y="0" width="520" height="520" />
+  <text x="300" y="650" text-anchor="middle" fill="#138A36" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="800">QML Foods</text>
+</svg>

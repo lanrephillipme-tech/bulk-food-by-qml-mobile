@@ -77,6 +77,10 @@ export function signUp(input: {
   return request<AuthBundle>("/api/auth/signup", input);
 }
 
+export function resendSignupConfirmation(email: string) {
+  return request<{ message?: string }>("/api/auth/resend-confirmation", { email });
+}
+
 export function requestPasswordReset(identifier: string) {
   return request<{ message?: string }>("/api/auth/password-reset", { identifier });
 }

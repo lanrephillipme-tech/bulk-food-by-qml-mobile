@@ -7,7 +7,8 @@
     "scheme": "bulkfoodqml",
     "userInterfaceStyle": "light",
     "splash": {
-      "backgroundColor": "#F7F5EF",
+      "image": "./assets/onboarding/launch.png",
+      "backgroundColor": "#FFFFFF",
       "resizeMode": "contain"
     },
     "assetBundlePatterns": [
@@ -23,7 +24,8 @@
         "backgroundColor": "#138A36"
       },
       "splash": {
-        "backgroundColor": "#F7F5EF",
+        "image": "./assets/onboarding/launch.png",
+        "backgroundColor": "#FFFFFF",
         "resizeMode": "contain"
       }
     },
@@ -41,7 +43,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#F7F5EF"
+          "image": "./assets/onboarding/launch.png",
+          "imageWidth": 240,
+          "backgroundColor": "#FFFFFF"
         }
       ],
       "expo-notifications"

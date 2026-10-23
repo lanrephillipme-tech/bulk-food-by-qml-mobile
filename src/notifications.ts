@@ -54,12 +54,16 @@ export async function registerForPushNotifications(sessionToken?: string): Promi
 
   const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
   const token = tokenResponse.data;
-  await registerPushToken({
+  const registration = await registerPushToken({
     token,
     platform: Platform.OS,
     deviceName: Device.deviceName,
     projectId
   }, sessionToken);
 
-  return { status: "registered", message: "Push notifications are active.", token };
+  if (!registration.registered || registration.status !== "active") {
+    throw new Error("Notification registration was not confirmed. Please try again.");
+  }
+
+  return { status: "registered", message: "This device is registered for notifications.", token };
 }
